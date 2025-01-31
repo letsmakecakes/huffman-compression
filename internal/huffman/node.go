@@ -7,6 +7,11 @@ type Node struct {
 	Left, Right *Node  // Pointers to the left and right child nodes
 }
 
+// isLeaf checks if the node is a leaf node
+func (n *Node) isLeaf() bool {
+	return n.Left == nil && n.Right == nil
+}
+
 // PriorityQueue implements a priority queue for Nodes based on their frequency.
 type PriorityQueue []*Node
 
