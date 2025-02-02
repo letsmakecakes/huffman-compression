@@ -2,162 +2,147 @@ package frequency
 
 import (
 	"bytes"
+	"huffman-compression/internal/models"
+	"os"
+	"reflect"
 	"testing"
 )
 
-type testCase struct {
-	name     string
-	input    string
-	expected map[byte]uint64
+// createTestFile is a helper function to create temporary test files.
+func createTestFile(filename string, data []byte, t *testing.T) {
+	t.Helper() // Marks this function as a test helper
+	err := os.WriteFile(filename, data, 0644)
+	if err != nil {
+		t.Fatalf("failed to create test file %s: %v", filename, err)
+	}
+	t.Cleanup(func() { os.Remove(filename) }) // Ensures cleanup after test
 }
 
+// TestCounter_Count checks if the frequency counter works correctly.
 func TestCounter_Count(t *testing.T) {
-	testCases := []testCase{
+	tests := []struct {
+		name     string
+		input    string
+		want     models.FrequencyMap
+		wantErr  bool
+		fileData []byte
+	}{
 		{
-			name:  "Simple text",
-			input: "hello world",
-			expected: map[byte]uint64{
-				'h': 1, 'e': 1, 'l': 3, 'o': 2, ' ': 1, 'w': 1, 'r': 1, 'd': 1,
-			},
+			name:     "basic test with simple string",
+			input:    "test.txt",
+			want:     models.FrequencyMap{'h': 1, 'e': 1, 'l': 2, 'o': 1},
+			fileData: []byte("hello"),
 		},
 		{
-			name:     "Empty string",
-			input:    "",
-			expected: map[byte]uint64{},
+			name:     "empty file",
+			input:    "empty.txt",
+			want:     models.FrequencyMap{},
+			fileData: []byte(""),
 		},
 		{
-			name:  "Repeated characters",
-			input: "aaabbbccc",
-			expected: map[byte]uint64{
-				'a': 3, 'b': 3, 'c': 3,
-			},
+			name:     "repeated characters",
+			input:    "repeated.txt",
+			want:     models.FrequencyMap{'a': 5, 'b': 3, 'c': 1},
+			fileData: []byte("aaaaabbbc"),
 		},
 		{
-			name:  "Mixed characters",
-			input: "Hello, World! 123",
-			expected: map[byte]uint64{
-				'H': 1, 'e': 1, 'l': 3, 'o': 2, ',': 1, ' ': 2, 'W': 1, 'r': 1, 'd': 1, '!': 1, '1': 1, '2': 1, '3': 1,
-			},
+			name:     "large chunk test",
+			input:    "large.txt",
+			want:     models.FrequencyMap{'x': 8192},
+			fileData: bytes.Repeat([]byte{'x'}, 8192),
+		},
+		{
+			name:    "non-existent file",
+			input:   "nonexistent.txt",
+			wantErr: true,
 		},
 	}
 
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			validateFrequencies(t, tc)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Create a test file if needed
+			if !tt.wantErr && tt.fileData != nil {
+				createTestFile(tt.input, tt.fileData, t)
+			}
+
+			// Create counter-instance
+			c := New()
+
+			// Run the test
+			got, err := c.Count(tt.input)
+
+			// Check error expectations
+			if (err != nil) != tt.wantErr {
+				t.Errorf("Counter.Count() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+
+			// Skip result comparison if expecting an error
+			if tt.wantErr {
+				return
+			}
+
+			// Compare results
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("Counter.Count() = %v, want = %v", got, tt.want)
+			}
 		})
 	}
 }
 
-func validateFrequencies(t *testing.T, tc testCase) {
-	t.Helper()
-
-	counter := NewCounter()
-	reader := bytes.NewBufferString(tc.input)
-
-	if err := counter.Count(reader); err != nil {
-		t.Fatalf("Failed to count frequencies: %v", err)
+// TestCounter_MergeFrequencies checks if frequency maps merge correctly.
+func TestCounter_MergeFrequencies(t *testing.T) {
+	tests := []struct {
+		name     string
+		initial  models.FrequencyMap
+		toMerge  models.FrequencyMap
+		expected models.FrequencyMap
+	}{
+		{"merge empty maps", models.FrequencyMap{}, models.FrequencyMap{}, models.FrequencyMap{}},
+		{"merge with empty map",
+			models.FrequencyMap{'a': 1, 'b': 2}, models.FrequencyMap{},
+			models.FrequencyMap{'a': 1, 'b': 2}},
+		{"merge overlapping maps",
+			models.FrequencyMap{'a': 1, 'b': 2},
+			models.FrequencyMap{'b': 3, 'c': 4},
+			models.FrequencyMap{'a': 1, 'b': 5, 'c': 4}},
 	}
 
-	frequencies := counter.GetFrequencies()
-	validateFrequencyCount(t, frequencies, tc.expected)
-	validateCharacterFrequencies(t, frequencies, tc.expected)
-}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := &Counter{frequencies: tt.initial}
+			c.mergeFrequencies(tt.toMerge)
 
-func validateFrequencyCount(t *testing.T, got, want map[byte]uint64) {
-	t.Helper()
-
-	if len(got) != len(want) {
-		t.Errorf("Frequency count mismatch: want %d, got %d", len(want), len(got))
-	}
-}
-
-func validateCharacterFrequencies(t *testing.T, got, want map[byte]uint64) {
-	t.Helper()
-
-	for char, expectedCount := range want {
-		actualCount, exists := got[char]
-		if !exists {
-			t.Errorf("Character %q not found in frequencies", char)
-			continue
-		}
-
-		if actualCount != expectedCount {
-			t.Errorf("Frequency mismatch for %q: want %d, got %d", char, expectedCount, actualCount)
-		}
+			if !reflect.DeepEqual(c.frequencies, tt.expected) {
+				t.Errorf("mergeFrequencies() got = %v, want %v", c.frequencies, tt.expected)
+			}
+		})
 	}
 }
 
-type benchmarkCase struct {
-	name  string
-	input string
-}
-
+// BenchmarkCounter_Count measures performance of the frequency counter.
 func BenchmarkCounter_Count(b *testing.B) {
-	testData := []benchmarkCase{
-		{
-			name:  "Small text",
-			input: "hello world",
-		},
-		{
-			name:  "Medium text",
-			input: "Lorem ipsum dolor sit amet, consectetur adipiscing elit.",
-		},
-		{
-			name:  "Large text",
-			input: string(bytes.Repeat([]byte("abcdefghijklmnopqrstuvwxyz "), 1000)),
-		},
+	filename := "benchmark_test.txt"
+	size := 1024 * 1024 // 1MB
+	data := make([]byte, size)
+	for i := range data {
+		data[i] = byte(i % 256)
 	}
 
-	for _, bc := range testData {
-		b.Run(bc.name, func(b *testing.B) {
-			runCountBenchmark(b, bc.input)
-		})
+	err := os.WriteFile(filename, data, 0644)
+	if err != nil {
+		b.Errorf("failed to create benchmark file: %v", err)
+		return
 	}
-}
+	defer os.Remove(filename)
 
-func runCountBenchmark(b *testing.B, input string) {
-	b.Helper()
+	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
-		counter := NewCounter()
-		reader := bytes.NewBufferString(input)
-
-		if err := counter.Count(reader); err != nil {
-			b.Fatalf("Failed to count frequencies: %v", err)
+		c := New()
+		_, err := c.Count(filename)
+		if err != nil {
+			b.Fatalf("Counter.Count() error = %v", err)
 		}
-	}
-}
-
-func TestCounter_MultipleReads(t *testing.T) {
-	const input = "Multiple reads test"
-	counter := NewCounter()
-
-	// Split input for multiple read operations
-	chunks := []string{
-		input[:10],
-		input[10:],
-	}
-
-	for i, chunk := range chunks {
-		reader := bytes.NewBufferString(chunk)
-		if err := counter.Count(reader); err != nil {
-			t.Fatalf("Failed to process chunk %d: %v", i+1, err)
-		}
-	}
-
-	validateTotalFrequencies(t, counter.GetFrequencies(), input)
-}
-
-func validateTotalFrequencies(t *testing.T, frequencies map[byte]uint64, input string) {
-	t.Helper()
-
-	var total uint64
-	for _, count := range frequencies {
-		total += count
-	}
-
-	expected := uint64(len(input))
-	if total != expected {
-		t.Errorf("Total frequency mismatch: want %d, got %d", expected, total)
 	}
 }
